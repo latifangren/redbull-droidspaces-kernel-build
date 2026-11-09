@@ -49,6 +49,17 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "Target Branch: $BRANCH"
 
+      - name: Setup Swap Space
+        run: |
+          echo "Memory before swap setup:"
+          free -h
+          sudo fallocate -l 10G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=10240
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "Memory after swap setup:"
+          free -h
+
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
@@ -107,7 +118,7 @@ jobs:
           make "${MAKE_ARGS[@]}" olddefconfig
 
           echo "=== Verified Droidspaces Configs in Generated .config ==="
-          grep -E "CONFIG_USER_NS|CONFIG_CFS_BANDWIDTH|CONFIG_MACVLAN|CONFIG_IP6_NF_NAT|CONFIG_IP6_NF_TARGET_MASQUERADE" out/.config || true
+          grep -E "CONFIG_USER_NS|CONFIG_CFS_BANDWIDTH|CONFIG_MACVLAN|CONFIG_IP6_NF_NAT|CONFIG_IP6_NF_TARGET_MASQUERADE|CONFIG_THINLTO" out/.config || true
 
       - name: Compile Kernel Image.lz4
         run: |
