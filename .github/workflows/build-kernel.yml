@@ -1,0 +1,185 @@
+name: Build Pixel 5 Droidspaces Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Pilih branch kernel dari crdroidandroid/android_kernel_google_redbull:'
+        type: choice
+        required: true
+        default: '16.0'
+        options:
+          - '16.0'
+          - '17.0'
+          - 'custom'
+      custom_branch:
+        description: 'Nama branch lain (hanya diisi jika memilih "custom"):'
+        required: false
+        default: ''
+      make_release:
+        description: 'Buat GitHub Release otomatis?'
+        type: boolean
+        required: true
+        default: true
+      release_tag:
+        description: 'Custom tag release (opsional, kosongkan untuk auto-generate):'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Kernel & AnyKernel3 Zip
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Builder Repo
+        uses: actions/checkout@v4
+
+      - name: Determine Target Branch
+        id: branch_info
+        run: |
+          if [ "${{ github.event.inputs.target_branch }}" = "custom" ]; then
+            BRANCH="${{ github.event.inputs.custom_branch }}"
+          else
+            BRANCH="${{ github.event.inputs.target_branch }}"
+          fi
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "Target Branch: $BRANCH"
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev lz4 liblz4-tool \
+            make git zip curl python3 python-is-python3
+
+      - name: Setup Proton Clang Toolchain
+        run: |
+          echo "Cloning Proton Clang..."
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git "$GITHUB_WORKSPACE/proton-clang"
+          echo "$GITHUB_WORKSPACE/proton-clang/bin" >> $GITHUB_PATH
+
+      - name: Clone crDroid Redbull Kernel Source
+        run: |
+          BRANCH="${{ steps.branch_info.outputs.branch }}"
+          echo "Cloning branch: $BRANCH..."
+          git clone --depth=1 -b "$BRANCH" https://github.com/crdroidandroid/android_kernel_google_redbull.git kernel_source
+          cd kernel_source
+          SHA=$(git rev-parse --short HEAD)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "Kernel Commit SHA: $SHA"
+        id: kernel_info
+
+      - name: Configure Kernel with Droidspaces Capabilities
+        run: |
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export LD=ld.lld
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+          cd kernel_source
+
+          echo "[1/3] Generating base redbull_defconfig..."
+          make O=out redbull_defconfig
+
+          echo "[2/3] Merging Droidspaces fragment config..."
+          scripts/kconfig/merge_config.sh -m -O out out/.config ../configs/droidspaces.config
+
+          echo "[3/3] Finalizing olddefconfig..."
+          make O=out olddefconfig
+
+          echo "=== Verified Droidspaces Configs in Generated .config ==="
+          grep -E "CONFIG_USER_NS|CONFIG_CFS_BANDWIDTH|CONFIG_MACVLAN|CONFIG_IP6_NF_NAT|CONFIG_IP6_NF_TARGET_MASQUERADE" out/.config || true
+
+      - name: Compile Kernel Image.lz4
+        run: |
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export LD=ld.lld
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+          cd kernel_source
+          make -j$(nproc --all) O=out Image.lz4
+
+          if [ ! -f out/arch/arm64/boot/Image.lz4 ]; then
+            echo "ERROR: Image.lz4 not generated!"
+            exit 1
+          fi
+          echo "Kernel binary built: $(ls -lh out/arch/arm64/boot/Image.lz4)"
+
+      - name: Package AnyKernel3 Flashable Zip
+        id: package
+        run: |
+          BRANCH="${{ steps.branch_info.outputs.branch }}"
+          SHA="${{ steps.kernel_info.outputs.sha }}"
+          BUILD_DATE=$(date +'%Y%m%d_%H%M%S')
+          ZIP_NAME="Droidspaces-Kernel-Pixel5-${BRANCH}-${SHA}-${BUILD_DATE}.zip"
+
+          echo "Cloning AnyKernel3 template..."
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel_pack
+          rm -rf anykernel_pack/.git anykernel_pack/.github
+
+          echo "Injecting Pixel 5 configuration & Image.lz4..."
+          cp anykernel/anykernel.sh anykernel_pack/anykernel.sh
+          cp kernel_source/out/arch/arm64/boot/Image.lz4 anykernel_pack/Image.lz4
+
+          cd anykernel_pack
+          zip -r9 "../${ZIP_NAME}" ./* -x README.md
+          cd ..
+
+          sha256sum "${ZIP_NAME}" > checksums.txt
+          cat checksums.txt
+
+          echo "zip_name=${ZIP_NAME}" >> $GITHUB_OUTPUT
+          echo "release_tag=kernel-${BRANCH}-${SHA}" >> $GITHUB_OUTPUT
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.zip_name }}
+          path: |
+            ${{ steps.package.outputs.zip_name }}
+            checksums.txt
+          retention-days: 14
+
+      - name: Publish to GitHub Releases
+        if: ${{ github.event.inputs.make_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag != '' && github.event.inputs.release_tag || steps.package.outputs.release_tag }}
+          name: "Droidspaces Kernel for Pixel 5 (${{ steps.branch_info.outputs.branch }}-${{ steps.kernel_info.outputs.sha }})"
+          body: |
+            ## Droidspaces Enhanced Kernel for Google Pixel 5 (Redbull)
+
+            Built from upstream crDroid repository: [`crdroidandroid/android_kernel_google_redbull`](https://github.com/crdroidandroid/android_kernel_google_redbull)
+            - **Target Branch**: `${{ steps.branch_info.outputs.branch }}`
+            - **Commit SHA**: `${{ steps.kernel_info.outputs.sha }}`
+            - **Toolchain**: Proton Clang (AOSP LLVM)
+            - **Package Type**: AnyKernel3 Flashable Zip
+
+            ### Enabled Droidspaces Capabilities:
+            - `CONFIG_USER_NS=y` (Unprivileged Docker, Podman, and browser sandboxing)
+            - `CONFIG_CFS_BANDWIDTH=y` (Container CPU limits / quota: `--cpus`)
+            - `CONFIG_MACVLAN=y` (Physical network attachment: `--net=macvlan`)
+            - `CONFIG_IP6_NF_NAT=y` & `CONFIG_IP6_NF_TARGET_MASQUERADE=y` (IPv6 NAT support in `--net=nat`)
+
+            ### How to Flash:
+            1. Download the zip below to your phone.
+            2. Open **KernelSU Manager** (or **Magisk** / TWRP).
+            3. Go to **Modules** -> **Install from storage** -> select the `.zip`.
+            4. Reboot device.
+          files: |
+            ${{ steps.package.outputs.zip_name }}
+            checksums.txt
+          draft: false
+          prerelease: false

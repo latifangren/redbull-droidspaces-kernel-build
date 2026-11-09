@@ -1,0 +1,17 @@
+# Build directories & toolchains
+kernel_source/
+proton-clang/
+anykernel_pack/
+out/
+
+# Artifacts
+*.zip
+*.tar.gz
+checksums.txt
+Image.lz4
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
