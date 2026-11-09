@@ -32,7 +32,7 @@ permissions:
 jobs:
   build:
     name: Build Kernel & AnyKernel3 Zip
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout Builder Repo
@@ -59,6 +59,8 @@ jobs:
         run: |
           echo "Cloning Proton Clang..."
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git "$GITHUB_WORKSPACE/proton-clang"
+          # Remove proton-clang's unprefixed 'ld' so host tools (fixdep, conf, modpost) use runner native /usr/bin/ld
+          rm -f "$GITHUB_WORKSPACE/proton-clang/bin/ld"
           echo "$GITHUB_WORKSPACE/proton-clang/bin" >> $GITHUB_PATH
 
       - name: Clone crDroid Redbull Kernel Source
@@ -75,24 +77,34 @@ jobs:
       - name: Configure Kernel with Droidspaces Capabilities
         run: |
           export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CC=clang
-          export LD=ld.lld
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
           cd kernel_source
 
+          MAKE_ARGS=(
+            O=out
+            ARCH=arm64
+            SUBARCH=arm64
+            CC=clang
+            LD=ld.lld
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+            HOSTCC="gcc -B/usr/bin/"
+            HOSTCXX="g++ -B/usr/bin/"
+          )
+
           echo "[1/3] Generating base redbull_defconfig..."
-          make O=out redbull_defconfig
+          make "${MAKE_ARGS[@]}" redbull_defconfig
 
           echo "[2/3] Merging Droidspaces fragment config..."
           scripts/kconfig/merge_config.sh -m -O out out/.config ../configs/droidspaces.config
 
           echo "[3/3] Finalizing olddefconfig..."
-          make O=out olddefconfig
+          make "${MAKE_ARGS[@]}" olddefconfig
 
           echo "=== Verified Droidspaces Configs in Generated .config ==="
           grep -E "CONFIG_USER_NS|CONFIG_CFS_BANDWIDTH|CONFIG_MACVLAN|CONFIG_IP6_NF_NAT|CONFIG_IP6_NF_TARGET_MASQUERADE" out/.config || true
@@ -100,16 +112,27 @@ jobs:
       - name: Compile Kernel Image.lz4
         run: |
           export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CC=clang
-          export LD=ld.lld
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
           cd kernel_source
-          make -j$(nproc --all) O=out Image.lz4
+
+          MAKE_ARGS=(
+            O=out
+            ARCH=arm64
+            SUBARCH=arm64
+            CC=clang
+            LD=ld.lld
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+            HOSTCC="gcc -B/usr/bin/"
+            HOSTCXX="g++ -B/usr/bin/"
+          )
+
+          make -j$(nproc --all) "${MAKE_ARGS[@]}" Image.lz4
 
           if [ ! -f out/arch/arm64/boot/Image.lz4 ]; then
             echo "ERROR: Image.lz4 not generated!"
