@@ -83,6 +83,10 @@ jobs:
           SHA=$(git rev-parse --short HEAD)
           echo "sha=$SHA" >> $GITHUB_OUTPUT
           echo "Kernel Commit SHA: $SHA"
+
+          echo "Applying Droidspaces vendor module compatibility patch..."
+          git apply "$GITHUB_WORKSPACE/patches/0001-module-bypass-crc-check.patch" || patch -p1 < "$GITHUB_WORKSPACE/patches/0001-module-bypass-crc-check.patch"
+          git diff kernel/module.c
         id: kernel_info
 
       - name: Configure Kernel with Droidspaces Capabilities

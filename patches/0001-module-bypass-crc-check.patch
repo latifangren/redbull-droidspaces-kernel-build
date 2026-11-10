@@ -1,0 +1,35 @@
+From: latifangren <33740740+latifangren@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 08:00:00 +0000
+Subject: [PATCH] kernel/module: allow vendor modules to load despite CRC differences
+
+When adding container features (such as CONFIG_USER_NS and CONFIG_CFS_BANDWIDTH),
+the layout of core kernel structures changes, causing genksyms to generate
+different CRC hashes for exported symbols such as module_layout.
+
+Because pre-existing vendor modules in /vendor/lib/modules were compiled against
+the stock kernel without these configs, strict check_version() rejects them
+with "disagrees about version of symbol module_layout", leading to missing
+hardware drivers (touchscreen, Wi-Fi) and bootloops.
+
+Bypass the strict CRC rejection in check_version() by warning and returning 1,
+allowing the kernel to load vendor modules seamlessly.
+---
+ kernel/module.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/module.c b/kernel/module.c
+index 287f3b8..a4b2c1d 100644
+--- a/kernel/module.c
++++ b/kernel/module.c
+@@ -1249,7 +1249,7 @@ static int check_version(const struct load_info *info,
+ 
+ bad_version:
+ 	pr_warn("%s: disagrees about version of symbol %s\n",
+ 	       info->name, symname);
+-	return 0;
++	return 1;
+ }
+ 
+ static inline int check_modstruct_version(const struct load_info *info,
+-- 
+2.34.1
